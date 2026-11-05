@@ -1,0 +1,12 @@
+{
+  "name": "botdcpracz",
+  "version": "1.0.0",
+  "description": "Zaawansowany bot moderacyjny w stylu Carl-bot",
+  "main": "botdcpracz.js",
+  "scripts": {
+    "start": "node botdcpracz.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  }
+}
