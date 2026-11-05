@@ -1,4 +1,3 @@
-require('dotenv').config();
 const { 
     Client, 
     GatewayIntentBits, 
@@ -25,37 +24,47 @@ const client = new Client({
     ]
 });
 
-// --- KONFIGURACJA ŚRODOWISKOWA ---
+// --- OBSŁUGA PLIKU CONFIG.JSON ---
 const CONFIG_FILE = process.env.CONFIG_PATH || './config.json';
-const TOKEN = process.env.DISCORD_TOKEN;
 
 let botSettings = {
     modChannelId: '123456789012345678',
     badWords: ['kurwa', 'chuj', 'pizda', 'pierdol', 'jp'],
-    blockLinks: true,          
-    blockDiscordInvites: true, 
+    
+    // Ustawienia Linków i Zaproszeń
+    blockLinks: true,          // Blokada wszystkich linków http/https
+    blockDiscordInvites: true, // Blokada zaproszeń Discord (discord.gg / invite)
+    
+    // Wygląd komunikatów ostrzeżeń (Edytowalne w panelu)
     warnChatMessage: '⚠️ {user}, niedozwolone słowo lub link!',
     warnDmMessage: '⚠️ Otrzymałeś ostrzeżenie na serwerze {server}!\n• Powód: {reason}\n• Status: {warns}/{maxWarns}',
+
+    // Anty-Spam
     spamLimit: 5,
     spamTime: 3000,
     muteDurationMinutes: 5,
     warnsSpamLimit: 3,
     punishmentSpam: 'timeout',
+
+    // Cenzura słów
     warnsBadWordLimit: 3,
     punishmentBadWord: 'timeout',
+
+    // Linki
     warnsLinkLimit: 3,
     punishmentLink: 'timeout',
+
+    // Anty-Ping
     maxPingsPerMessage: 4,
     warnsPingLimit: 2,
     punishmentPing: 'timeout',
 
-    // Powitania
+    // Powitania i Pożegnania
     welcomeEnabled: false,
     welcomeChannelId: '123456789012345678',
     welcomeStyle: 'embed',
     welcomeMessage: 'Witaj {user} na serwerze {server}! Jesteś naszym {members} członkiem.',
 
-    // Pożegnania
     goodbyeEnabled: false,
     goodbyeChannelId: '123456789012345678',
     goodbyeStyle: 'embed',
@@ -66,9 +75,9 @@ if (fs.existsSync(CONFIG_FILE)) {
     try {
         const savedData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         botSettings = { ...botSettings, ...savedData };
-        console.log(`[INFO] Wczytano konfigurację z: ${CONFIG_FILE}`);
+        console.log('[INFO] Wczytano konfigurację z config.json');
     } catch (e) {
-        console.error('[BLAD] Nie udało się odczytać pliku konfiguracyjnego.');
+        console.error('[BLAD] Nie udało się odczytać config.json');
     }
 }
 
@@ -76,6 +85,11 @@ function saveConfig() {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
 }
 
+const TOKEN = process.env.DISCORD_TOKEN;
+if (!TOKEN) {
+    console.error('[BLAD] Brak zmiennej środowiskowej DISCORD_TOKEN.');
+    process.exit(1);
+}
 const userMessageTracker = new Map();
 const userWarnings = new Map(); 
 const userHistoryLogs = new Map(); 
@@ -88,6 +102,7 @@ function addHistoryLog(userId, actionText, details) {
     if (history.length > 5) history.pop();
 }
 
+// Wysyłanie powiadomienia DM z obsługą szablonu
 async function safeSendDM(member, category, reason, currentWarns, maxLimit) {
     const userId = member.id;
     const now = Date.now();
@@ -111,6 +126,7 @@ async function safeSendDM(member, category, reason, currentWarns, maxLimit) {
     } catch (e) {}
 }
 
+// Rejestracja komend slash
 const commands = [
     new SlashCommandBuilder().setName('panel-moderacyjny').setDescription('Panel sterowania bota (Admin) - Prywatny'),
     new SlashCommandBuilder().setName('panel-powitan').setDescription('Edytor powitań (Admin)'),
@@ -185,6 +201,7 @@ client.on('guildMemberRemove', async (member) => {
     } catch (e) {}
 });
 
+// --- SYSTEM MODERACJI I KAR ---
 async function handleInfraction(guild, member, category, punishmentType, reason, messageContent) {
     const userId = member.id;
     const nowStr = new Date().toLocaleString('pl-PL');
@@ -249,14 +266,21 @@ async function handleInfraction(guild, member, category, punishmentType, reason,
     }
 }
 
-async function sendEphemeralWarning(channel, member, customText) {
+// Funkcja pomocnicza do wysyłania PRYWATNEGO ostrzeżenia na czacie
+async function sendEphemeralWarning(interactionOrChannel, member, customText) {
     const formatted = (customText || botSettings.warnChatMessage)
         .replace(/{user}/g, `<@${member.id}>`)
         .replace(/{tag}/g, member.user.username);
 
+    // Wysyłamy krótkie prywatne ostrzeżenie widoczne TYLKO dla użytkownika
     try {
-        const msg = await channel.send({ content: formatted });
-        setTimeout(() => msg.delete().catch(() => {}), 4000);
+        if (interactionOrChannel.isRepliable && interactionOrChannel.isRepliable()) {
+            await interactionOrChannel.reply({ content: formatted, flags: MessageFlags.Ephemeral });
+        } else {
+            // Jeśli wywołane z messageCreate
+            const msg = await interactionOrChannel.send({ content: formatted });
+            setTimeout(() => msg.delete().catch(() => {}), 4000);
+        }
     } catch (e) {}
 }
 
@@ -268,8 +292,12 @@ client.on('messageCreate', async (message) => {
     const userId = message.author.id;
     const contentLower = message.content.toLowerCase();
 
-    if (member.permissions.has(PermissionFlagsBits.Administrator)) return;
+    // REGULA 0: ADMINISTRACJA JEST IGNOROWANA (Brak blokad dla Admina)
+    if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+        return;
+    }
 
+    // 1. Anty-Ping
     const totalPings = message.mentions.users.size + message.mentions.roles.size;
     if (botSettings.maxPingsPerMessage > 0 && totalPings > botSettings.maxPingsPerMessage) {
         try {
@@ -280,26 +308,29 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
+    // 2. Blokada Zaproszeń Discord (discord.gg / invite)
     const discordInviteRegex = /(discord\.(gg|io|me|li)|discordapp\.com\/invite|discord\.com\/invite)\/[a-zA-Z0-9]+/gi;
     if (botSettings.blockDiscordInvites && discordInviteRegex.test(message.content)) {
         try {
             await message.delete();
-            await sendEphemeralWarning(message.channel, member, `⚠️ {user}, wysyłanie zaproszeń na inne serwery jest zabronione!`);
+            await sendEphemeralWarning(message.channel, member, `⚠️ {user}, wysyłanie zaproszeń na inne serwery Discord jest zabronione!`);
             await handleInfraction(message.guild, member, 'link', botSettings.punishmentLink, 'Wysłanie zaproszenia Discord', message.content);
         } catch (e) {}
         return;
     }
 
+    // 3. Ogólna blokada Linków (http / https)
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     if (botSettings.blockLinks && urlRegex.test(message.content)) {
         try {
             await message.delete();
-            await sendEphemeralWarning(message.channel, member, `⚠️ {user}, wysyłanie linków jest zabronione!`);
+            await sendEphemeralWarning(message.channel, member, `⚠️ {user}, wysyłanie linków na tym serwerze jest zabronione!`);
             await handleInfraction(message.guild, member, 'link', botSettings.punishmentLink, 'Wysłanie linku', message.content);
         } catch (e) {}
         return;
     }
 
+    // 4. Cenzura słów (Niezależna od wielkości liter)
     const containsBadWord = botSettings.badWords.some(word => {
         const clean = word.trim().toLowerCase();
         return clean.length > 0 && contentLower.includes(clean);
@@ -314,6 +345,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
+    // 5. Anty-Spam
     const now = Date.now();
     if (!userMessageTracker.has(userId)) userMessageTracker.set(userId, []);
     let timestamps = userMessageTracker.get(userId);
@@ -330,7 +362,7 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// --- OBSŁUGA INTERAKCIJ ---
+// --- OBSŁUGA INTERAKCJI ---
 client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand()) {
         const { commandName } = interaction;
@@ -342,7 +374,7 @@ client.on('interactionCreate', async (interaction) => {
 
             const panelEmbed = new EmbedBuilder()
                 .setTitle('🛡️ Centrum Konfiguracji Moderacji')
-                .setDescription('Wybierz kategorię zarządzania z menu:')
+                .setDescription('Wybierz kategorię zarządzania z menu (Wiadomość widoczna tylko dla Ciebie):')
                 .setColor(0x00008B);
 
             const selectMenu = new StringSelectMenuBuilder()
@@ -357,7 +389,7 @@ client.on('interactionCreate', async (interaction) => {
                 ]);
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
-            return await interaction.reply({ embeds: [panelEmbed], components: [row], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ embeds: [panelEmbed], components: [row], flags: MessageFlags.Ephemeral });
         }
 
         else if (commandName === 'panel-powitan') {
@@ -384,7 +416,7 @@ client.on('interactionCreate', async (interaction) => {
                 ]);
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
-            return await interaction.reply({ embeds: [welcomeEmbed], components: [row], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ embeds: [welcomeEmbed], components: [row], flags: MessageFlags.Ephemeral });
         }
 
         else if (commandName === 'panel-pozegnan') {
@@ -411,7 +443,7 @@ client.on('interactionCreate', async (interaction) => {
                 ]);
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
-            return await interaction.reply({ embeds: [goodbyeEmbed], components: [row], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ embeds: [goodbyeEmbed], components: [row], flags: MessageFlags.Ephemeral });
         }
 
         else if (commandName === 'sprawdz-uzytkownika') {
@@ -434,7 +466,7 @@ client.on('interactionCreate', async (interaction) => {
                     { name: '📜 Historia', value: historyText, inline: false }
                 );
 
-            return await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+            await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         }
 
         else if (commandName === 'mute') {
@@ -446,9 +478,9 @@ client.on('interactionCreate', async (interaction) => {
             const reason = interaction.options.getString('powod') || 'Brak';
             try {
                 await targetMember.timeout(minutes * 60 * 1000, reason);
-                return await interaction.reply({ content: `✅ Wyciszono ${targetMember.user.tag} na ${minutes} min.`, flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: `✅ Wyciszono ${targetMember.user.tag} na ${minutes} min.`, flags: MessageFlags.Ephemeral });
             } catch (e) {
-                return await interaction.reply({ content: '❌ Błąd wyciszania.', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '❌ Błąd wyciszania.', flags: MessageFlags.Ephemeral });
             }
         }
 
@@ -459,117 +491,56 @@ client.on('interactionCreate', async (interaction) => {
             const targetMember = interaction.options.getMember('uzytkownik');
             try {
                 await targetMember.timeout(null, 'Odciszenie');
-                return await interaction.reply({ content: `✅ Odciszono ${targetMember.user.tag}.`, flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: `✅ Odciszono ${targetMember.user.tag}.`, flags: MessageFlags.Ephemeral });
             } catch (e) {
-                return await interaction.reply({ content: '❌ Błąd odciszania.', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '❌ Błąd odciszania.', flags: MessageFlags.Ephemeral });
             }
         }
     }
 
-    // --- NAPRAWIONE: OBSŁUGA MENU POWITAŃ Z AKTUALIZACJĄ PANELU ---
+    // MENU POWITAŃ I POŻEGNAŃ
     if (interaction.isStringSelectMenu() && interaction.customId === 'welcome_select_menu') {
         const value = interaction.values[0];
-
-        if (value === 'w_toggle') { 
-            botSettings.welcomeEnabled = !botSettings.welcomeEnabled; 
-            saveConfig(); 
-
-            // Tworzymy zaktualizowany embed podglądu powitań
-            const updatedEmbed = new EmbedBuilder()
-                .setTitle('👋 Panel Konfiguracji Powitań')
-                .setColor(0x00FF00)
-                .addFields(
-                    { name: 'Status', value: botSettings.welcomeEnabled ? '✅ Włączone' : '❌ Wyłączone', inline: true },
-                    { name: 'Kanał ID', value: `\`${botSettings.welcomeChannelId}\``, inline: true },
-                    { name: 'Treść', value: botSettings.welcomeMessage, inline: false }
-                );
-
-            const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('welcome_select_menu')
-                .setPlaceholder('⚙️ Wybierz akcję...')
-                .addOptions([
-                    { label: '📝 Edytuj Treść i Kanał Powitań', value: 'w_edit_text' },
-                    { label: botSettings.welcomeEnabled ? '❌ Wyłącz Powitania' : '✅ Włącz Powitania', value: 'w_toggle' },
-                    { label: '🎨 Zmień Wygląd (Embed / Tekst)', value: 'w_style' }
-                ]);
-
-            const row = new ActionRowBuilder().addComponents(selectMenu);
-            return await interaction.update({ embeds: [updatedEmbed], components: [row] });
-        }
-        else if (value === 'w_style') { 
-            botSettings.welcomeStyle = botSettings.welcomeStyle === 'embed' ? 'tekst' : 'embed'; 
-            saveConfig(); 
-            return await interaction.reply({ content: `✅ Wygląd powitań: **${botSettings.welcomeStyle.toUpperCase()}**`, flags: MessageFlags.Ephemeral }); 
-        }
+        if (value === 'w_toggle') { botSettings.welcomeEnabled = !botSettings.welcomeEnabled; saveConfig(); await interaction.reply({ content: `✅ Powitania: **${botSettings.welcomeEnabled ? 'Włączone' : 'Wyłączone'}**`, flags: MessageFlags.Ephemeral }); }
+        else if (value === 'w_style') { botSettings.welcomeStyle = botSettings.welcomeStyle === 'embed' ? 'tekst' : 'embed'; saveConfig(); await interaction.reply({ content: `✅ Wygląd powitań: **${botSettings.welcomeStyle.toUpperCase()}**`, flags: MessageFlags.Ephemeral }); }
         else if (value === 'w_edit_text') {
             const modal = new ModalBuilder().setCustomId('modal_welcome').setTitle('Edycja Powitań');
             const chInput = new TextInputBuilder().setCustomId('w_ch').setLabel('ID Kanału').setStyle(TextInputStyle.Short).setValue(botSettings.welcomeChannelId).setRequired(true);
             const msgInput = new TextInputBuilder().setCustomId('w_msg').setLabel('Treść ({user}, {tag}, {server}, {members})').setStyle(TextInputStyle.Paragraph).setValue(botSettings.welcomeMessage).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(chInput), new ActionRowBuilder().addComponents(msgInput));
-            return await interaction.showModal(modal);
+            await interaction.showModal(modal);
         }
     }
 
-    // --- NAPRAWIONE: OBSŁUGA MENU POŻEGNAN Z AKTUALIZACJĄ PANELU ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'goodbye_select_menu') {
         const value = interaction.values[0];
-
-        if (value === 'g_toggle') { 
-            botSettings.goodbyeEnabled = !botSettings.goodbyeEnabled; 
-            saveConfig(); 
-
-            // Tworzymy zaktualizowany embed podglądu pożegnań
-            const updatedEmbed = new EmbedBuilder()
-                .setTitle('📤 Panel Konfiguracji Pożegnań')
-                .setColor(0xFF0000)
-                .addFields(
-                    { name: 'Status', value: botSettings.goodbyeEnabled ? '✅ Włączone' : '❌ Wyłączone', inline: true },
-                    { name: 'Kanał ID', value: `\`${botSettings.goodbyeChannelId}\``, inline: true },
-                    { name: 'Treść', value: botSettings.goodbyeMessage, inline: false }
-                );
-
-            const selectMenu = new StringSelectMenuBuilder()
-                .setCustomId('goodbye_select_menu')
-                .setPlaceholder('⚙️ Wybierz akcję...')
-                .addOptions([
-                    { label: '📝 Edytuj Treść i Kanał Pożegnań', value: 'g_edit_text' },
-                    { label: botSettings.goodbyeEnabled ? '❌ Wyłącz Pożegnania' : '✅ Włącz Pożegnania', value: 'g_toggle' },
-                    { label: '🎨 Zmień Wygląd (Embed / Tekst)', value: 'g_style' }
-                ]);
-
-            const row = new ActionRowBuilder().addComponents(selectMenu);
-            return await interaction.update({ embeds: [updatedEmbed], components: [row] });
-        }
-        else if (value === 'g_style') { 
-            botSettings.goodbyeStyle = botSettings.goodbyeStyle === 'embed' ? 'tekst' : 'embed'; 
-            saveConfig(); 
-            return await interaction.reply({ content: `✅ Wygląd pożegnań: **${botSettings.goodbyeStyle.toUpperCase()}**`, flags: MessageFlags.Ephemeral }); 
-        }
+        if (value === 'g_toggle') { botSettings.goodbyeEnabled = !botSettings.goodbyeEnabled; saveConfig(); await interaction.reply({ content: `✅ Pożegnania: **${botSettings.goodbyeEnabled ? 'Włączone' : 'Wyłączone'}**`, flags: MessageFlags.Ephemeral }); }
+        else if (value === 'g_style') { botSettings.goodbyeStyle = botSettings.goodbyeStyle === 'embed' ? 'tekst' : 'embed'; saveConfig(); await interaction.reply({ content: `✅ Wygląd pożegnań: **${botSettings.goodbyeStyle.toUpperCase()}**`, flags: MessageFlags.Ephemeral }); }
         else if (value === 'g_edit_text') {
             const modal = new ModalBuilder().setCustomId('modal_goodbye').setTitle('Edycja Pożegnań');
             const chInput = new TextInputBuilder().setCustomId('g_ch').setLabel('ID Kanału').setStyle(TextInputStyle.Short).setValue(botSettings.goodbyeChannelId).setRequired(true);
             const msgInput = new TextInputBuilder().setCustomId('g_msg').setLabel('Treść ({user}, {tag}, {server}, {members})').setStyle(TextInputStyle.Paragraph).setValue(botSettings.goodbyeMessage).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(chInput), new ActionRowBuilder().addComponents(msgInput));
-            return await interaction.showModal(modal);
+            await interaction.showModal(modal);
         }
     }
 
-    // OBSŁUGA GŁÓWNEGO MENU MODERACJI
+    // MENU KATEGORII MODERACJI
     if (interaction.isStringSelectMenu() && interaction.customId === 'panel_categories_menu') {
         const category = interaction.values[0];
 
         if (category === 'cat_clear') {
             try {
                 await interaction.channel.bulkDelete(10, true);
-                return await interaction.reply({ content: '✅ Usunięto 10 wiadomości.', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '✅ Usunięto 10 wiadomości.', flags: MessageFlags.Ephemeral });
             } catch (e) {
-                return await interaction.reply({ content: '❌ Błąd usuwania.', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '❌ Błąd usuwania.', flags: MessageFlags.Ephemeral });
             }
         } else if (category === 'cat_form') {
             const modal = new ModalBuilder().setCustomId('modal_form').setTitle('Zgłoszenie');
             const q1 = new TextInputBuilder().setCustomId('f1').setLabel('Treść').setStyle(TextInputStyle.Paragraph).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(q1));
-            return await interaction.showModal(modal);
+            await interaction.showModal(modal);
         } else if (category === 'cat_edit_antispam') {
             const modal = new ModalBuilder().setCustomId('modal_antispam').setTitle('Ustawienia Kar i Spamu');
             const limit = new TextInputBuilder().setCustomId('l').setLabel('Max spam msg').setStyle(TextInputStyle.Short).setValue(botSettings.spamLimit.toString()).setRequired(true);
@@ -577,7 +548,7 @@ client.on('interactionCreate', async (interaction) => {
             const wSpam = new TextInputBuilder().setCustomId('ws').setLabel('Max ostrzeżeń spam').setStyle(TextInputStyle.Short).setValue(botSettings.warnsSpamLimit.toString()).setRequired(true);
             const dur = new TextInputBuilder().setCustomId('d').setLabel('Czas mute (min)').setStyle(TextInputStyle.Short).setValue(botSettings.muteDurationMinutes.toString()).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(limit), new ActionRowBuilder().addComponents(pSpam), new ActionRowBuilder().addComponents(wSpam), new ActionRowBuilder().addComponents(dur));
-            return await interaction.showModal(modal);
+            await interaction.showModal(modal);
         } else if (category === 'cat_edit_words') {
             const modal = new ModalBuilder().setCustomId('modal_words').setTitle('Cenzura, Linki, Wygląd i Logi');
             const ch = new TextInputBuilder().setCustomId('ch').setLabel('ID Kanału Logów').setStyle(TextInputStyle.Short).setValue(botSettings.modChannelId).setRequired(true);
@@ -593,31 +564,30 @@ client.on('interactionCreate', async (interaction) => {
                 new ActionRowBuilder().addComponents(chatWarn),
                 new ActionRowBuilder().addComponents(dmWarn)
             );
-            return await interaction.showModal(modal);
+            await interaction.showModal(modal);
         } else if (category === 'cat_status') {
-            return await interaction.reply({ content: `📊 **Ustawienia:**\n• Kanał logów: \`${botSettings.modChannelId}\`\n• Zaproszenia Discord: ${botSettings.blockDiscordInvites ? 'Blokowane' : 'Dozwolone'}\n• Wszystkie Linki: ${botSettings.blockLinks ? 'Tak' : 'Nie'}`, flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: `📊 **Ustawienia:**\n• Kanał logów: \`${botSettings.modChannelId}\`\n• Zaproszenia Discord: ${botSettings.blockDiscordInvites ? 'Blokowane' : 'Dozwolone'}\n• Wszystkie Linki: ${botSettings.blockLinks ? 'Tak' : 'Nie'}`, flags: MessageFlags.Ephemeral });
         }
     }
 
-    // OBSŁUGA OKIENEK MODALNYCH
     if (interaction.isModalSubmit()) {
         if (interaction.customId === 'modal_welcome') {
             botSettings.welcomeChannelId = interaction.fields.getTextInputValue('w_ch').trim();
             botSettings.welcomeMessage = interaction.fields.getTextInputValue('w_msg');
             saveConfig();
-            return await interaction.reply({ content: '✅ Zaktualizowano powitania!', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '✅ Zaktualizowano powitania!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_goodbye') {
             botSettings.goodbyeChannelId = interaction.fields.getTextInputValue('g_ch').trim();
             botSettings.goodbyeMessage = interaction.fields.getTextInputValue('g_msg');
             saveConfig();
-            return await interaction.reply({ content: '✅ Zaktualizowano pożegnania!', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '✅ Zaktualizowano pożegnania!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_antispam') {
             botSettings.spamLimit = parseInt(interaction.fields.getTextInputValue('l')) || botSettings.spamLimit;
             botSettings.punishmentSpam = interaction.fields.getTextInputValue('ps').trim().toLowerCase();
             botSettings.warnsSpamLimit = parseInt(interaction.fields.getTextInputValue('ws')) || botSettings.warnsSpamLimit;
             botSettings.muteDurationMinutes = parseInt(interaction.fields.getTextInputValue('d')) || botSettings.muteDurationMinutes;
             saveConfig();
-            return await interaction.reply({ content: '✅ Zapisano ustawienia w pliku JSON!', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '✅ Zapisano ustawienia w pliku JSON!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_words') {
             botSettings.modChannelId = interaction.fields.getTextInputValue('ch').trim();
             botSettings.badWords = interaction.fields.getTextInputValue('w').split(',').map(w => w.trim()).filter(w => w.length > 0);
@@ -625,15 +595,15 @@ client.on('interactionCreate', async (interaction) => {
             botSettings.warnChatMessage = interaction.fields.getTextInputValue('cw');
             botSettings.warnDmMessage = interaction.fields.getTextInputValue('dw');
             saveConfig();
-            return await interaction.reply({ content: '✅ Zaktualizowano ustawienia i cenzurę w JSON!', flags: MessageFlags.Ephemeral });
+            await interaction.reply({ content: '✅ Zaktualizowano ustawienia i cenzurę w JSON!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_form') {
             const content = interaction.fields.getTextInputValue('f1');
             const modChannel = interaction.guild.channels.cache.get(botSettings.modChannelId);
             if (modChannel) {
                 await modChannel.send({ content: `📝 Zgłoszenie od ${interaction.user.tag}: ${content}` });
-                return await interaction.reply({ content: '✅ Wysłano zgłoszenie!', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '✅ Wysłano zgłoszenie!', flags: MessageFlags.Ephemeral });
             } else {
-                return await interaction.reply({ content: '❌ Nie znaleziono kanału logów!', flags: MessageFlags.Ephemeral });
+                await interaction.reply({ content: '❌ Nie znaleziono kanału logów!', flags: MessageFlags.Ephemeral });
             }
         }
     }
