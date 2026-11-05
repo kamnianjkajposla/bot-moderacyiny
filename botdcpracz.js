@@ -330,7 +330,7 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// --- OBSŁUGA INTERAKCJI ---
+// --- OBSŁUGA INTERAKCIJ ---
 client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand()) {
         const { commandName } = interaction;
@@ -466,13 +466,35 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // OBSŁUGA MENU POWITAŃ
+    // --- NAPRAWIONE: OBSŁUGA MENU POWITAŃ Z AKTUALIZACJĄ PANELU ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'welcome_select_menu') {
         const value = interaction.values[0];
+
         if (value === 'w_toggle') { 
             botSettings.welcomeEnabled = !botSettings.welcomeEnabled; 
             saveConfig(); 
-            return await interaction.reply({ content: `✅ Powitania: **${botSettings.welcomeEnabled ? 'Włączone' : 'Wyłączone'}**`, flags: MessageFlags.Ephemeral }); 
+
+            // Tworzymy zaktualizowany embed podglądu powitań
+            const updatedEmbed = new EmbedBuilder()
+                .setTitle('👋 Panel Konfiguracji Powitań')
+                .setColor(0x00FF00)
+                .addFields(
+                    { name: 'Status', value: botSettings.welcomeEnabled ? '✅ Włączone' : '❌ Wyłączone', inline: true },
+                    { name: 'Kanał ID', value: `\`${botSettings.welcomeChannelId}\``, inline: true },
+                    { name: 'Treść', value: botSettings.welcomeMessage, inline: false }
+                );
+
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('welcome_select_menu')
+                .setPlaceholder('⚙️ Wybierz akcję...')
+                .addOptions([
+                    { label: '📝 Edytuj Treść i Kanał Powitań', value: 'w_edit_text' },
+                    { label: botSettings.welcomeEnabled ? '❌ Wyłącz Powitania' : '✅ Włącz Powitania', value: 'w_toggle' },
+                    { label: '🎨 Zmień Wygląd (Embed / Tekst)', value: 'w_style' }
+                ]);
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+            return await interaction.update({ embeds: [updatedEmbed], components: [row] });
         }
         else if (value === 'w_style') { 
             botSettings.welcomeStyle = botSettings.welcomeStyle === 'embed' ? 'tekst' : 'embed'; 
@@ -488,13 +510,35 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // OBSŁUGA MENU POŻEGNAN
+    // --- NAPRAWIONE: OBSŁUGA MENU POŻEGNAN Z AKTUALIZACJĄ PANELU ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'goodbye_select_menu') {
         const value = interaction.values[0];
+
         if (value === 'g_toggle') { 
             botSettings.goodbyeEnabled = !botSettings.goodbyeEnabled; 
             saveConfig(); 
-            return await interaction.reply({ content: `✅ Pożegnania: **${botSettings.goodbyeEnabled ? 'Włączone' : 'Wyłączone'}**`, flags: MessageFlags.Ephemeral }); 
+
+            // Tworzymy zaktualizowany embed podglądu pożegnań
+            const updatedEmbed = new EmbedBuilder()
+                .setTitle('📤 Panel Konfiguracji Pożegnań')
+                .setColor(0xFF0000)
+                .addFields(
+                    { name: 'Status', value: botSettings.goodbyeEnabled ? '✅ Włączone' : '❌ Wyłączone', inline: true },
+                    { name: 'Kanał ID', value: `\`${botSettings.goodbyeChannelId}\``, inline: true },
+                    { name: 'Treść', value: botSettings.goodbyeMessage, inline: false }
+                );
+
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('goodbye_select_menu')
+                .setPlaceholder('⚙️ Wybierz akcję...')
+                .addOptions([
+                    { label: '📝 Edytuj Treść i Kanał Pożegnań', value: 'g_edit_text' },
+                    { label: botSettings.goodbyeEnabled ? '❌ Wyłącz Pożegnania' : '✅ Włącz Pożegnania', value: 'g_toggle' },
+                    { label: '🎨 Zmień Wygląd (Embed / Tekst)', value: 'g_style' }
+                ]);
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+            return await interaction.update({ embeds: [updatedEmbed], components: [row] });
         }
         else if (value === 'g_style') { 
             botSettings.goodbyeStyle = botSettings.goodbyeStyle === 'embed' ? 'tekst' : 'embed'; 
