@@ -637,7 +637,8 @@ client.on('interactionCreate', async (interaction) => {
             return await interaction.reply({ content: '✅ Zapisano ustawienia w pliku JSON!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_words') {
             botSettings.modChannelId = interaction.fields.getTextInputValue('ch').trim();
-            botSettings.badWords = interaction.fields.getTextInputValue('w'].split(',').map(w => w.trim()).filter(w => w.length > 0);
+            // Poprawiony nawias okrągły zamiast kwadratowego:
+            botSettings.badWords = interaction.fields.getTextInputValue('w').split(',').map(w => w.trim()).filter(w => w.length > 0);
             botSettings.blockDiscordInvites = interaction.fields.getTextInputValue('inv').trim().toLowerCase() === 'tak';
             botSettings.warnChatMessage = interaction.fields.getTextInputValue('cw');
             botSettings.warnDmMessage = interaction.fields.getTextInputValue('dw');
@@ -650,7 +651,7 @@ client.on('interactionCreate', async (interaction) => {
                 await modChannel.send({ content: `📝 Zgłoszenie od ${interaction.user.tag}: ${content}` });
                 return await interaction.reply({ content: '✅ Wysłano zgłoszenie!', flags: MessageFlags.Ephemeral });
             } else {
-                return await interaction.reply({ content: '❌ Nie znaleziono kanału logów!', flags: MessageFlags.ERROR || MessageFlags.Ephemeral });
+                return await interaction.reply({ content: '❌ Nie znaleziono kanału logów!', flags: MessageFlags.Ephemeral });
             }
         }
     }
