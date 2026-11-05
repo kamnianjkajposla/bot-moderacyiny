@@ -15,6 +15,7 @@ const {
     MessageFlags
 } = require('discord.js');
 const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
     intents: [
@@ -25,8 +26,9 @@ const client = new Client({
     ]
 });
 
-// --- KONFIGURACJA ŚRODOWISKOWA ---
-const CONFIG_FILE = process.env.CONFIG_PATH || './config.json';
+// --- KONFIGURACJA ŚCIEŻKI I ŚRODOWISKA ---
+// Domyślnie wskazuje na zamontowany wolumen /app/data w Coolify
+const CONFIG_FILE = process.env.CONFIG_PATH || '/app/data/config.json';
 const TOKEN = process.env.DISCORD_TOKEN;
 
 let botSettings = {
@@ -62,30 +64,64 @@ let botSettings = {
     goodbyeMessage: 'Żegnaj {user}. Użytkownik opuścił serwer {server}. Zostało nas {members} osób.'
 };
 
-// Automatyczne tworzenie folderu dla konfiguracji, jeśli nie istnieje
-const configDir = CONFIG_FILE.substring(0, CONFIG_FILE.lastIndexOf('/'));
-if (configDir && !fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
+// Automatyczne tworzenie katalogu /app/data, jeśli nie istnieje
+const configDir = path.dirname(CONFIG_FILE);
+if (!fs.existsSync(configDir)) {
+    try {
+        fs.mkdirSync(configDir, { recursive: true });
+        console.log(`[SYSTEM] Utworzono katalog na dane: ${configDir}`);
+    } catch (err) {
+        console.error(`[BLAD] Nie udało się utworzyć katalogu ${configDir}:`, err);
+    }
 }
 
+// Wczytanie konfiguracji z pliku
 if (fs.existsSync(CONFIG_FILE)) {
     try {
         const savedData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         botSettings = { ...botSettings, ...savedData };
-        console.log(`[INFO] Wczytano konfigurację z: ${CONFIG_FILE}`);
+        console.log(`[INFO] Wczytano konfigurację pomyślnie z: ${CONFIG_FILE}`);
     } catch (e) {
-        console.error('[BLAD] Nie udało się odczytać pliku konfiguracyjnego.');
+        console.error('[BLAD] Plik konfiguracyjny jest uszkodzony, używam domyślnych ustawień.');
+    }
+} else {
+    // Tworzy domyślny plik przy pierwszym uruchomieniu w zamontowanym wolumenie
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
+        console.log(`[INFO] Utworzono domyślny plik konfiguracyjny w: ${CONFIG_FILE}`);
+    } catch (e) {
+        console.error('[BLAD] Nie można zapisać pliku konfiguracyjnego w wolumenie.');
     }
 }
 
 function saveConfig() {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
+    } catch (e) {
+        console.error('[BLAD] Błąd podczas zapisywania konfiguracji:', e);
+    }
 }
 
+// --- ZARZĄDZANIE PAMIĘCIĄ I MAPAMI (Optymalizacja zasobów) ---
 const userMessageTracker = new Map();
 const userWarnings = new Map(); 
 const userHistoryLogs = new Map(); 
 const dmLogTracker = new Map();
+
+// Cykliczne czyszczenie starej pamięci podręcznej co 10 minut (zapobiega wyciekom RAM)
+setInterval(() => {
+    const now = Date.now();
+    for (const [userId, timestamps] of userMessageTracker.entries()) {
+        const filtered = timestamps.filter(t => now - t < 60000);
+        if (filtered.length === 0) userMessageTracker.delete(userId);
+        else userMessageTracker.set(userId, filtered);
+    }
+    for (const [userId, dms] of dmLogTracker.entries()) {
+        const filtered = dms.filter(t => now - t < 120000);
+        if (filtered.length === 0) dmLogTracker.delete(userId);
+        else dmLogTracker.set(userId, filtered);
+    }
+}, 10 * 60 * 1000);
 
 function addHistoryLog(userId, actionText, details) {
     if (!userHistoryLogs.has(userId)) userHistoryLogs.set(userId, []);
@@ -143,6 +179,7 @@ client.once('clientReady', async () => {
     console.log(`[TEST ŁĄCZNOŚCI] ✅ Połączono pomyślnie z Discord API!`);
     console.log(`[TEST ŁĄCZNOŚCI] 🤖 Zalogowano jako: ${client.user.tag}`);
     console.log(`[TEST ŁĄCZNOŚCI] 🌐 Bot obsługuje serwery: ${client.guilds.cache.size}`);
+    console.log(`[TEST ŁĄCZNOŚCI] 📂 Ścieżka konfiguracji: ${CONFIG_FILE}`);
     console.log('==================================================');
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -155,7 +192,7 @@ client.once('clientReady', async () => {
     console.log('==================================================');
 });
 
-// --- WITANIE I POŻEGNANIA ---
+// --- POWITANIA I POŻEGNANIA ---
 client.on('guildMemberAdd', async (member) => {
     if (!botSettings.welcomeEnabled) return;
     const channel = member.guild.channels.cache.get(botSettings.welcomeChannelId);
@@ -281,7 +318,6 @@ client.on('messageCreate', async (message) => {
     const userId = message.author.id;
     const contentLower = message.content.toLowerCase();
 
-    // Administratorzy są pomijani w automoderacji
     if (member.permissions.has(PermissionFlagsBits.Administrator)) return;
 
     // 1. Anty-Ping
@@ -637,7 +673,6 @@ client.on('interactionCreate', async (interaction) => {
             return await interaction.reply({ content: '✅ Zapisano ustawienia w pliku JSON!', flags: MessageFlags.Ephemeral });
         } else if (interaction.customId === 'modal_words') {
             botSettings.modChannelId = interaction.fields.getTextInputValue('ch').trim();
-            // Poprawiony nawias okrągły zamiast kwadratowego:
             botSettings.badWords = interaction.fields.getTextInputValue('w').split(',').map(w => w.trim()).filter(w => w.length > 0);
             botSettings.blockDiscordInvites = interaction.fields.getTextInputValue('inv').trim().toLowerCase() === 'tak';
             botSettings.warnChatMessage = interaction.fields.getTextInputValue('cw');
