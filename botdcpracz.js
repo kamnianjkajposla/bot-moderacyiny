@@ -26,10 +26,34 @@ const client = new Client({
     ]
 });
 
-// --- KONFIGURACJA ŚCIEŻKI I ŚRODOWISKA ---
-// Domyślnie wskazuje na zamontowany wolumen /app/data w Coolify
-const CONFIG_FILE = process.env.CONFIG_PATH || '/app/data/config.json';
+// --- KONFIGURACJA ŚRODOWISKOWA I BEZPIECZNA ŚCIEŻKA DANYCH ---
 const TOKEN = process.env.DISCORD_TOKEN;
+
+// Bezpieczne ustalenie katalogu na dane (np. /app/data w Coolify lub ./data lokalnie)
+let DATA_DIR = process.env.DATA_DIR && typeof process.env.DATA_DIR === 'string' 
+    ? process.env.DATA_DIR 
+    : path.join(__dirname, 'data');
+
+try {
+    if (fs.existsSync(DATA_DIR) && !fs.lstatSync(DATA_DIR).isDirectory()) {
+        console.warn(`⚠️ Ścieżka ${DATA_DIR} jest plikiem, a nie katalogiem! Przełączam na katalog domyślny.`);
+        DATA_DIR = __dirname;
+    }
+} catch (e) {
+    DATA_DIR = __dirname;
+}
+
+// Upewniamy się, że folder istnieje przed zapisem pliku
+if (!fs.existsSync(DATA_DIR)) {
+    try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        console.log(`[SYSTEM] Utworzono katalog na dane: ${DATA_DIR}`);
+    } catch (err) {
+        console.error(`[BLAD] Nie udało się utworzyć katalogu ${DATA_DIR}:`, err);
+    }
+}
+
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 let botSettings = {
     modChannelId: '123456789012345678',
@@ -64,33 +88,21 @@ let botSettings = {
     goodbyeMessage: 'Żegnaj {user}. Użytkownik opuścił serwer {server}. Zostało nas {members} osób.'
 };
 
-// Automatyczne tworzenie katalogu /app/data, jeśli nie istnieje
-const configDir = path.dirname(CONFIG_FILE);
-if (!fs.existsSync(configDir)) {
-    try {
-        fs.mkdirSync(configDir, { recursive: true });
-        console.log(`[SYSTEM] Utworzono katalog na dane: ${configDir}`);
-    } catch (err) {
-        console.error(`[BLAD] Nie udało się utworzyć katalogu ${configDir}:`, err);
-    }
-}
-
-// Wczytanie konfiguracji z pliku
+// Wczytywanie konfiguracji z pliku
 if (fs.existsSync(CONFIG_FILE)) {
     try {
         const savedData = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         botSettings = { ...botSettings, ...savedData };
-        console.log(`[INFO] Wczytano konfigurację pomyślnie z: ${CONFIG_FILE}`);
+        console.log(`[INFO] Wczytano konfigurację z: ${CONFIG_FILE}`);
     } catch (e) {
-        console.error('[BLAD] Plik konfiguracyjny jest uszkodzony, używam domyślnych ustawień.');
+        console.error('[BLAD] Nie udało się odczytać pliku konfiguracyjnego.');
     }
 } else {
-    // Tworzy domyślny plik przy pierwszym uruchomieniu w zamontowanym wolumenie
     try {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
-        console.log(`[INFO] Utworzono domyślny plik konfiguracyjny w: ${CONFIG_FILE}`);
+        console.log(`[INFO] UTWORZONO plik konfiguracyjny w: ${CONFIG_FILE}`);
     } catch (e) {
-        console.error('[BLAD] Nie można zapisać pliku konfiguracyjnego w wolumenie.');
+        console.error('[BLAD] Nie udało się zapisać początkowego pliku konfiguracyjnego.');
     }
 }
 
@@ -98,17 +110,17 @@ function saveConfig() {
     try {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(botSettings, null, 4), 'utf8');
     } catch (e) {
-        console.error('[BLAD] Błąd podczas zapisywania konfiguracji:', e);
+        console.error('[BLAD] Zapis konfiguracji nie powiódł się:', e);
     }
 }
 
-// --- ZARZĄDZANIE PAMIĘCIĄ I MAPAMI (Optymalizacja zasobów) ---
+// --- OPTYMALIZACJA PAMIĘCI RAM ---
 const userMessageTracker = new Map();
 const userWarnings = new Map(); 
 const userHistoryLogs = new Map(); 
 const dmLogTracker = new Map();
 
-// Cykliczne czyszczenie starej pamięci podręcznej co 10 minut (zapobiega wyciekom RAM)
+// Czyszczenie niepotrzebnych danych z pamięci co 10 minut
 setInterval(() => {
     const now = Date.now();
     for (const [userId, timestamps] of userMessageTracker.entries()) {
@@ -173,19 +185,19 @@ const commands = [
         .addUserOption(option => option.setName('uzytkownik').setDescription('Gracz').setRequired(true))
 ].map(command => command.toJSON());
 
-// --- TESTY ŁĄCZNOŚCI I START BOTA ---
+// --- START BOTA I TESTY ŁĄCZNOŚCI ---
 client.once('clientReady', async () => {
     console.log('==================================================');
     console.log(`[TEST ŁĄCZNOŚCI] ✅ Połączono pomyślnie z Discord API!`);
     console.log(`[TEST ŁĄCZNOŚCI] 🤖 Zalogowano jako: ${client.user.tag}`);
     console.log(`[TEST ŁĄCZNOŚCI] 🌐 Bot obsługuje serwery: ${client.guilds.cache.size}`);
-    console.log(`[TEST ŁĄCZNOŚCI] 📂 Ścieżka konfiguracji: ${CONFIG_FILE}`);
+    console.log(`[TEST ŁĄCZNOŚCI] 📂 Plik konfiguracji w: ${CONFIG_FILE}`);
     console.log('==================================================');
 
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log('[TEST ŁĄCZNOŚCI] ✅ Pomyślnie zarejestrowano komendy Slash (/panel-...)!');
+        console.log('[TEST ŁĄCZNOŚCI] ✅ Pomyślnie zarejestrowano komendy Slash!');
     } catch (error) {
         console.error('[TEST ŁĄCZNOŚCI] ❌ Błąd rejestracji komend Slash:', error);
     }
@@ -310,7 +322,7 @@ async function sendEphemeralWarning(channel, member, customText) {
     } catch (e) {}
 }
 
-// --- AUTOMODERACJA I CENZURA ---
+// --- AUTOMODERACJA ---
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
@@ -331,7 +343,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    // 2. Blokada zaproszeń Discord
+    // 2. Zaproszenia Discord
     const discordInviteRegex = /(discord\.(gg|io|me|li)|discordapp\.com\/invite|discord\.com\/invite)\/[a-zA-Z0-9]+/gi;
     if (botSettings.blockDiscordInvites && discordInviteRegex.test(message.content)) {
         try {
@@ -521,7 +533,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // OBSŁUGA MENU POWITAŃ
+    // OBSŁUGA MENU POWITAŃ (Z NATYCHMIASTOWĄ AKTUALIZACJĄ WIDOKU)
     if (interaction.isStringSelectMenu() && interaction.customId === 'welcome_select_menu') {
         const value = interaction.values[0];
 
